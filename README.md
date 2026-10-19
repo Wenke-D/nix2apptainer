@@ -1,7 +1,20 @@
 # apptainer-tools
 
-Apptainer (SIF) images from Nix store paths, built in the ordinary Nix
-sandbox: no VM, no root, no fakeroot.
+Export Nix packages as Apptainer (SIF) images.
+
+`buildImage` packs Nix packages and their closure into one `.sif` file, which
+runs with `apptainer run` on a machine that has Apptainer but no Nix, such as
+an HPC cluster. The image is an ordinary derivation: an unprivileged
+`apptainer build` packs it in the Nix sandbox, without a VM, so the builder
+needs neither KVM nor root.
+
+`buildLayer` puts the heavy dependencies that rarely change (a toolchain, MPI,
+CUDA) into a separate layer file. You build it and copy it to the cluster
+once, and again only when something in its closure changes. An image built on
+the layer leaves those dependencies out, so a change to your own code means
+rebuilding and copying only that smaller image.
+
+## Quick start
 
 ```nix
 apptainer-tools.buildImage {
@@ -11,51 +24,28 @@ apptainer-tools.buildImage {
 }
 ```
 
-The derivation is the `.sif` file itself. Run it with the host's Apptainer.
-`tests/image.nix` is this example with a few more options set:
+`apptainer-tools` stands for the library: `tools` in the flake under
+[Adding it to your project](#adding-it-to-your-project), or
+`pkgs.apptainer-tools` with the overlay. The output of the derivation is the
+`.sif` file itself. [tests/image.nix](tests/image.nix) is this example with a
+few more options set. To build and run it from a clone of this repository:
 
 ```bash
-nix build .#checks.x86_64-linux.image -o hello.sif
-apptainer run hello.sif -g Bonjour
+nix build .#checks.x86_64-linux.image -o hello.sif   # aarch64-linux on ARM
+apptainer run hello.sif -g Bonjour                   # Bonjour
 ```
 
-## Compared with nixpkgs' `singularity-tools`
+To run an image, a machine needs only Apptainer, plus the image's layers if
+it has any. With zstd compression it needs Apptainer 1.4 or later (see
+[`buildImage`](#buildimage)).
 
-`singularity-tools.buildImage` builds the image inside a Linux VM
-(`vmTools.runInLinuxVM`). The builder needs KVM, and the image is put
-together on a scratch ext3 disk whose size (`diskSize`) and memory
-(`memSize`) are fixed in advance.
-
-`apptainer-tools` copies the closure into a directory and lets
-`apptainer build` pack that directory into a SIF, which needs no privileges.
-This runs as the build user in the ordinary sandbox, so any Linux builder
-works: remote, CI, with or without KVM. The cost is that `extraCommands`
-runs as the build user too (`mkdir` works, `useradd` does not).
-
-On top of that it has:
-
-- **Layers.** `buildLayer` packs the heavy part that rarely changes (a
-  toolchain, MPI, CUDA) into a squashfs, used with
-  `apptainer run --overlay <layer>:ro`. An image built with
-  `layers = [ layer ]` leaves out the layer's store paths. A rebuild then
-  packs, and a cluster receives, only what changed. Run without its layer,
-  the image stops with an error that names the layer.
-- **`environment`.** Variables set in every `run`, `exec` and `shell`.
-  They are quoted so that Apptainer's env-file reader reads them back as
-  written.
-- **`contents` merged into the image root.** Their `bin`, `lib`, `share`,
-  `etc` and so on become links into the store, as in `dockerTools`.
-- **`compression`, `compressionLevel`.** The mksquashfs compressor. zstd at
-  a low level packs many times faster than gzip, but the image then needs
-  Apptainer 1.4 or later to run (1.3 rejects zstd).
-
-## Use
+## Adding it to your project
 
 From a flake:
 
 ```nix
 {
-  inputs.apptainer-tools.url = "<this repository>";
+  inputs.apptainer-tools.url = "gitlab:coconut/apptainer-tools?host=gitlab.inria.fr";
   inputs.apptainer-tools.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs = { nixpkgs, apptainer-tools, ... }:
@@ -69,17 +59,162 @@ From a flake:
 }
 ```
 
-You can also use `overlays.default`, which adds `pkgs.apptainer-tools`.
-Without flakes, call `default.nix` the same way:
-`pkgs.callPackage ./apptainer-tools { }`. The images are built from the
-caller's packages either way. This flake's own `nixpkgs` is only used for
-the checks.
+The flake also has `overlays.default`, which adds `pkgs.apptainer-tools`.
+Without flakes, pass a checkout of this repository to `callPackage`:
+`pkgs.callPackage ./apptainer-tools { }`. Either way the images are built from
+the caller's packages; the flake's own `nixpkgs` input is used only for the
+checks.
 
-`default.nix` documents every argument of `buildImage` and `buildLayer`.
+Images build only on Linux, and the checks are defined for x86_64-linux and
+aarch64-linux. From macOS, use a Linux remote builder, or Nix in a Linux
+container such as the `nixos/nix` Docker image. To build in the Nix sandbox
+there, as on a regular builder, set `sandbox = true` (the image turns it off)
+and run the container with `--privileged`, without which Nix cannot set the
+sandbox up. The builds still run as Nix's unprivileged build users.
+
+## Layers
+
+A layer is a squashfs file that holds the closure of some packages under
+`/nix/store`. An image built with `layers = [ layer ]` leaves out every store
+path that the layer holds, and at run time Apptainer mounts the layer over the
+image with `--overlay <layer>:ro`. The cluster needs nothing for this beyond
+an Apptainer version that supports `--overlay`. Here the layer holds MPI:
+
+```nix
+let
+  mpi = apptainer-tools.buildLayer {
+    name = "mpi";
+    contents = [ openmpi ];
+  };
+in
+apptainer-tools.buildImage {
+  name = "solver";
+  contents = [ my-solver ];
+  layers = [ mpi ];
+  runScript = ''exec my-solver "$@"'';
+}
+```
+
+```bash
+apptainer run --overlay mpi.sqfs:ro solver.sif
+```
+
+This example is an illustration and has not been built; `my-solver` stands
+for your own package. `mpi.sqfs` and `solver.sif` are the outputs of `mpi` and
+of the image. The layer is a derivation of its own, so expose it as a package
+next to the image to build it (an image also lists its layers in
+`image.layers`).
+
+When only `my-solver` changes, only the image is rebuilt and copied to the
+cluster. The layer changes when anything in its closure does, for example
+after a nixpkgs update. Its store path then changes too, and images already on
+the cluster keep needing the layer they were built on, so keep the old layer
+file until those images are replaced.
+
+An image leaves out only the store paths that match the layer's exactly; any
+others are copied into the image as usual. Build the layer and the images from
+the same package set, and several images can share one layer.
+
+Before anything else runs in the container (for `run`, `exec` and `shell`
+alike), an image checks for each of its layers. Run without one, it stops with
+an error that names the missing layer, instead of failing later on a missing
+library. The check uses the layer's store hash, not its file name. The error
+names the layer by the base name of its store path (`<hash>-<name>.sqfs`), an
+outdated copy of the layer fails with the same error, and the file can have
+any name on the cluster.
+
+`layers` is a list; pass one `--overlay` per layer. Each layer holds the full
+closure of its own `contents`, so two layers can both contain glibc. The
+`contents` of each layer are linked into the image root (`/bin`, `/lib` and so
+on) like the image's own, so `mpirun` from the layer is on the `PATH`.
+
+[tests/layer.nix](tests/layer.nix) and
+[tests/layered-image.nix](tests/layered-image.nix) are an image of `hello` on
+a layer that holds coreutils and its closure, glibc included:
+
+```bash
+nix build .#checks.x86_64-linux.layer -o coreutils.sqfs
+nix build .#checks.x86_64-linux.layered-image -o hello-layered.sif
+apptainer run --overlay coreutils.sqfs:ro hello-layered.sif   # Hello, world!
+apptainer run hello-layered.sif   # error: this image needs the layer ...-coreutils.sqfs
+```
+
+## Compared with nixpkgs' `singularity-tools`
+
+nixpkgs' `singularity-tools.buildImage` boots a Linux VM
+(`vmTools.runInLinuxVM`), formats a scratch ext3 disk in it, and runs
+`singularity build` there as root. Apptainer can pack a plain directory into a
+SIF without privileges, and `apptainer-tools` relies on that: it copies the
+closure into a directory and runs `apptainer build` as the build user, in the
+ordinary Nix sandbox.
+
+| | `singularity-tools` | `apptainer-tools` |
+| --- | --- | --- |
+| How the image is made | `singularity build` as root in a VM | `apptainer build` as the build user, in the Nix sandbox |
+| Builder | needs the `kvm` system feature | any Linux builder: remote, CI, a container |
+| Sizes to set in advance | `diskSize` (the scratch disk) and `memSize` of the VM, 1024 MiB each by default | none |
+| Program that builds the image | `singularity` argument, default `pkgs.singularity` (SingularityCE) | `apptainer` argument, default `pkgs.apptainer` |
+| Links in the image root | `bin/*` of each package, in `/bin` | `bin`, `lib`, `share`, `etc`, ... of each package, merged as in `dockerTools` |
+| Environment variables | no argument | `environment` |
+| Compression | gzip | `compression`, `compressionLevel` (gzip, zstd, xz, lz4, lzo) |
+| Layers | none | `buildLayer`, `layers` |
+| Setup script | `runAsRoot`, as root | `extraCommands`, as the build user |
+
+The cost of building without root is that `extraCommands` runs as the build
+user: `mkdir` and writing files work, `useradd` and `chown` do not. Apptainer
+runs the container as the calling user and adds that user to `/etc/passwd` at
+run time, so images rarely need either.
+
+## Reference
+
+### `buildImage`
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | The output is the file `<name>.sif` |
+| `contents` | `[ ]` | Packages whose closure is copied in and whose top-level directories are merged into the image root, as links into the store |
+| `layers` | `[ ]` | Layers from `buildLayer`. Their store paths are left out of the image, which then runs only with them as overlays |
+| `runScript` | `exec /bin/sh "$@"` | Shell code that `apptainer run` executes with `/bin/sh` |
+| `environment` | `{ }` | Variables set in every `apptainer run`, `exec` and `shell`, read back exactly as written (quotes, `$`, `` ` `` and `\` included) |
+| `extraCommands` | `""` | Shell code run in the image root before it is packed, as the build user |
+| `compression` | `"gzip"` | mksquashfs compressor: `gzip`, `zstd`, `xz`, `lz4` or `lzo` |
+| `compressionLevel` | `null` | 1-9 for gzip and lzo, 1-22 for zstd, none for xz and lz4; `null` keeps the mksquashfs default (9 for gzip, 15 for zstd) |
+| `apptainer` | `pkgs.apptainer` | The Apptainer that builds the image |
+
+Every Apptainer version reads gzip. zstd at a low level packs many times
+faster, but the image then needs Apptainer 1.4 or later to run (1.3 rejects
+zstd).
+
+Besides `contents`, every image has bash as `/bin/sh` (unless `contents` or a
+layer brings its own) and an `/etc/passwd` and `/etc/group` that hold only
+root. `image.layers` lists the layers an image needs.
+
+### `buildLayer`
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | The output is the file `<name>.sqfs` |
+| `contents` | required | Packages whose closure the layer holds |
+| `compression` | `"gzip"` | As for `buildImage` |
+| `compressionLevel` | `null` | As for `buildImage` |
+
+`buildLayer` runs mksquashfs with the options that `apptainer build` gives it,
+so an Apptainer that reads an image also reads a layer with the same
+compression.
+
+[default.nix](default.nix) documents the same arguments next to the code.
 
 ## Tests
 
-`nix flake check` builds the examples in `tests/` for x86_64-linux and
-aarch64-linux, which needs a builder for each. To build one:
-`nix build .#checks.x86_64-linux.image`. Each file shows how to run its
-image.
+`nix flake check` builds the examples in [tests/](tests/) for the system it
+runs on; `nix flake check --all-systems` builds them for x86_64-linux and
+aarch64-linux, which needs a builder for each. The checks build the images but
+do not run them. The comment at the top of each file shows how to run its
+image, and the commands under Quick start and at the end of Layers come from
+there. On 2026-10-19 they all gave the output shown on aarch64-linux (with
+`aarch64-linux` in place of `x86_64-linux`) and Apptainer 1.5.1. They have
+not been run on x86_64-linux.
+
+## Acknowledgement
+
+The development of this tool was assisted by LLMs and AI agents.
