@@ -1,4 +1,3 @@
-# The flake's checks: example images, one per file, each saying how to run it
 { pkgs, apptainer-tools }:
 
 let

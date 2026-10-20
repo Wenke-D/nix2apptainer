@@ -1,5 +1,3 @@
-# apptainer-tools: Apptainer (SIF) images from Nix store paths, built in the
-# ordinary Nix sandbox: no VM, no root, no fakeroot.
 {
   lib,
   runCommand,
@@ -14,7 +12,6 @@
 let
   defaultApptainer = apptainer;
 
-  # mksquashfs options for a compressor and an optional level
   compressionArgs =
     compression: level:
     [
@@ -28,12 +25,9 @@ let
 in
 {
   # A read-only layer for `apptainer run --overlay <layer>:ro <image>`: a
-  # squashfs holding the closure of `contents` under /nix/store.  Build the
-  # heavy, rarely changing part of an image (CUDA, ...) as a layer and pass it
-  # to buildImage's `layers`: the image leaves that closure out, so a rebuild
-  # packs, and a cluster receives, only what changed.
+  # squashfs holding the closure of `contents` under /nix/store.
   #
-  # name, contents, compression, compressionLevel: as for buildImage
+  # name, compression, compressionLevel: as for buildImage
   buildLayer =
     {
       name,
@@ -44,12 +38,10 @@ in
     let
       closure = closureInfo { rootPaths = contents; };
 
-      # What an image built on this layer checks for (see buildImage): named
-      # after the store paths the layer holds, which are what the image
-      # needs.  Not after $out: a build that Nix makes under a scratch path
-      # (--check without the sandbox, content-addressed derivations) would
-      # leave that path in the squashfs, where Nix cannot rewrite it because
-      # it is compressed.
+      # Named after the closure rather than $out: when Nix builds under a
+      # scratch path (--check without the sandbox, content-addressed
+      # derivations), it cannot rewrite that path inside the compressed
+      # squashfs.
       marker = "${lib.substring 0 32 (baseNameOf "${closure}")}-${name}";
     in
     runCommand "${name}.sqfs"
@@ -79,11 +71,8 @@ in
   # environment:   variables set in every `apptainer run/exec/shell`
   # extraCommands: shell code run in the image root before it is packed, as
   #                the build user (`mkdir`, not `useradd`)
-  # compression:   squashfs compressor: gzip (Apptainer's default, which
-  #                every runtime reads), zstd, xz, lz4 or lzo.  zstd at a low
-  #                level packs many times faster, but the runtime must
-  #                support it: Apptainer 1.3 rejects zstd images, 1.4 and
-  #                later packages read them.
+  # compression:   squashfs compressor: gzip, zstd, xz, lz4 or lzo.  Images
+  #                packed with zstd need Apptainer 1.4 or later to run.
   # compressionLevel: for gzip (1-9), zstd (1-22) or lzo (1-9); null keeps
   #                mksquashfs's default (9 for gzip, 15 for zstd)
   buildImage =

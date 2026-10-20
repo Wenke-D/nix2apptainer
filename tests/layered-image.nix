@@ -1,5 +1,5 @@
-# An image on the layer of layer.nix.  It holds hello and the shell but not
-# glibc, which is in the layer, so it runs only with the layer as an overlay:
+# glibc is in the layer, not in this image, so the image runs only with the
+# layer as an overlay:
 #
 #   nix build .#checks.x86_64-linux.layer -o coreutils.sqfs
 #   nix build .#checks.x86_64-linux.layered-image -o hello-layered.sif
