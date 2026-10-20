@@ -43,18 +43,24 @@ in
     }:
     let
       closure = closureInfo { rootPaths = contents; };
+
+      # What an image built on this layer checks for (see buildImage): named
+      # after the store paths the layer holds, which are what the image
+      # needs.  Not after $out: a build that Nix makes under a scratch path
+      # (--check without the sandbox, content-addressed derivations) would
+      # leave that path in the squashfs, where Nix cannot rewrite it because
+      # it is compressed.
+      marker = "${lib.substring 0 32 (baseNameOf "${closure}")}-${name}";
     in
     runCommand "${name}.sqfs"
       {
         nativeBuildInputs = [ squashfsTools ];
-        passthru = { inherit contents closure; };
+        passthru = { inherit contents closure marker; };
       }
       ''
         mkdir -p root/.layers
         xargs -a ${closure}/store-paths cp -a --parents -t root
-
-        # What an image built on this layer checks for (see buildImage).
-        touch root/.layers/$(basename $out)
+        touch root/.layers/${marker}
 
         # The options `apptainer build` gives mksquashfs, so the layer reads
         # wherever the image does.
@@ -122,7 +128,7 @@ in
             file = baseNameOf (toString layer);
           in
           ''
-            if [ ! -e /.layers/${file} ]; then
+            if [ ! -e /.layers/${layer.marker} ]; then
               echo "error: this image needs the layer ${file}: run it with --overlay ${file}:ro" >&2
               exit 1
             fi

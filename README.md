@@ -118,10 +118,11 @@ the same package set, and several images can share one layer.
 Before anything else runs in the container (for `run`, `exec` and `shell`
 alike), an image checks for each of its layers. Run without one, it stops with
 an error that names the missing layer, instead of failing later on a missing
-library. The check uses the layer's store hash, not its file name. The error
-names the layer by the base name of its store path (`<hash>-<name>.sqfs`), an
-outdated copy of the layer fails with the same error, and the file can have
-any name on the cluster.
+library. The check looks for a marker that the layer derives from the store
+paths it holds, not for its file name. The error names the layer by the base
+name of its store path (`<hash>-<name>.sqfs`). A layer built from other
+packages, such as an outdated copy, fails with the same error, and the file
+can have any name on the cluster.
 
 `layers` is a list; pass one `--overlay` per layer. Each layer holds the full
 closure of its own `contents`, so two layers can both contain glibc. The
