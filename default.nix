@@ -146,7 +146,9 @@ in
         pushd root >/dev/null
 
         comm -23 <(sort ${closure}/store-paths) \
-          <(sort -u /dev/null ${lib.concatMapStringsSep " " (layer: "${layer.closure}/store-paths") layers}) \
+          <(sort -u /dev/null ${
+            lib.concatMapStringsSep " " (layer: "${layer.closure}/store-paths") layers
+          }) \
           | xargs -r cp -a --parents -t .
         cp -a ${rootLinks}/. .
 
