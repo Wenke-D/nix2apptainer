@@ -140,6 +140,41 @@ apptainer run --overlay coreutils.sqfs:ro hello-layered.sif   # Hello, world!
 apptainer run hello-layered.sif   # error: this image needs the layer ...-coreutils.sqfs
 ```
 
+## NVIDIA GPUs
+
+With `--nv`, Apptainer makes the NVIDIA driver of the host available in the
+container:
+
+- It binds the driver libraries into `/.singularity.d/libs` and adds that
+  directory to `LD_LIBRARY_PATH`. A program from Nix finds `libcuda` there.
+- It binds host tools such as `nvidia-smi` into `/usr/bin`. A conventional
+  distribution built these tools, so they look for the dynamic loader at
+  `/lib64/ld-linux-x86-64.so.2`. Programs from Nix name a loader in the store
+  instead.
+
+So that the host tools run, every image has a link at that path to the glibc
+loader in the image. On aarch64-linux the link is
+`/lib/ld-linux-aarch64.so.1`. The image of [tests/image.nix](tests/image.nix)
+shows it:
+
+```bash
+nix build .#checks.x86_64-linux.image -o hello.sif
+apptainer exec --nv hello.sif nvidia-smi -L   # GPU 0: <model> (UUID: ...)
+```
+
+The host tools then run on the glibc of the image, which must be at least as
+new as the glibc they were built for. Other programs built for a
+conventional distribution also start with the loader, such as tools
+installed under `$HOME`, which Apptainer mounts by default. They can still
+fail on other libraries that they expect from the distribution, such as
+`libstdc++`.
+
+`fhsCompat = false` leaves the link out. The host tools then fail:
+
+```
+FATAL:   exec /usr/bin/nvidia-smi failed: a shared library is likely missing in the image
+```
+
 ## Compared with nixpkgs' `singularity-tools`
 
 nixpkgs' `singularity-tools.buildImage` boots a Linux VM
@@ -180,6 +215,7 @@ run time, so images rarely need either.
 | `extraCommands` | `""` | Shell code run in the image root before it is packed, as the build user |
 | `compression` | `"gzip"` | mksquashfs compressor: `gzip`, `zstd`, `xz`, `lz4` or `lzo` |
 | `compressionLevel` | `null` | 1-9 for gzip and lzo, 1-22 for zstd, none for xz and lz4; `null` keeps the mksquashfs default (9 for gzip, 15 for zstd) |
+| `fhsCompat` | `true` | Adds the conventional paths that programs not built by Nix look for. For now this is only the dynamic loader, which the host tools of `--nv` need (see [NVIDIA GPUs](#nvidia-gpus)). `false` leaves them out |
 | `apptainer` | `pkgs.apptainer` | The Apptainer that builds the image |
 
 Every Apptainer version reads gzip. zstd at a low level packs many times
@@ -188,7 +224,9 @@ zstd).
 
 Besides `contents`, every image has bash as `/bin/sh` (unless `contents` or a
 layer brings its own) and an `/etc/passwd` and `/etc/group` that hold only
-root. `image.layers` lists the layers an image needs.
+root. Unless `fhsCompat = false`, it also has the glibc loader at
+`/lib64/ld-linux-x86-64.so.2` (`/lib/ld-linux-aarch64.so.1` on
+aarch64-linux). `image.layers` lists the layers an image needs.
 
 ### `buildLayer`
 
@@ -211,10 +249,12 @@ compression.
 runs on; `nix flake check --all-systems` builds them for x86_64-linux and
 aarch64-linux, which needs a builder for each. The checks build the images but
 do not run them. The comment at the top of each file shows how to run its
-image, and the commands under Quick start and at the end of Layers come from
-there. On 2026-10-19 they all gave the output shown on aarch64-linux (with
-`aarch64-linux` in place of `x86_64-linux`) and Apptainer 1.5.1. They have
-not been run on x86_64-linux.
+image, and the commands under Quick start, at the end of Layers and under
+NVIDIA GPUs come from there. On 2026-11-04 they all gave the output shown on
+x86_64-linux, with Apptainer 1.5.3 and an NVIDIA GPU. On 2026-10-19 all
+except the `--nv` command gave the output shown on aarch64-linux (with
+`aarch64-linux` in place of `x86_64-linux`) and Apptainer 1.5.1. The `--nv`
+command has not been run on aarch64-linux.
 
 ## Acknowledgement
 

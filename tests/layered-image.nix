@@ -4,7 +4,7 @@
 #   nix build .#checks.x86_64-linux.layer -o coreutils.sqfs
 #   nix build .#checks.x86_64-linux.layered-image -o hello-layered.sif
 #   apptainer run --overlay coreutils.sqfs:ro hello-layered.sif         # Hello, world!
-#   apptainer exec --overlay coreutils.sqfs:ro hello-layered.sif ls /   # ls from the layer
+#   apptainer exec --overlay coreutils.sqfs:ro hello-layered.sif ls /   # ls from the layer, no lib64
 #   apptainer run hello-layered.sif     # error: this image needs the layer ...-coreutils.sqfs
 {
   apptainer-tools,
@@ -17,4 +17,5 @@ apptainer-tools.buildImage {
   contents = [ hello ];
   layers = [ layer ];
   runScript = ''exec hello "$@"'';
+  fhsCompat = false;
 }

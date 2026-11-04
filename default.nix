@@ -1,5 +1,6 @@
 {
   lib,
+  stdenv,
   runCommand,
   closureInfo,
   symlinkJoin,
@@ -75,6 +76,11 @@ in
   #                packed with zstd need Apptainer 1.4 or later to run.
   # compressionLevel: for gzip (1-9), zstd (1-22) or lzo (1-9); null keeps
   #                mksquashfs's default (9 for gzip, 15 for zstd)
+  # fhsCompat:     add the conventional paths that programs not built by Nix
+  #                look for.  For now only the dynamic loader
+  #                (/lib64/ld-linux-x86-64.so.2 on x86_64), linked to the
+  #                image's glibc: the host tools that `apptainer --nv` binds
+  #                in, such as nvidia-smi, need it.
   buildImage =
     {
       name,
@@ -85,6 +91,7 @@ in
       extraCommands ? "",
       compression ? "gzip",
       compressionLevel ? null,
+      fhsCompat ? true,
       apptainer ? defaultApptainer,
     }:
     let
@@ -125,6 +132,9 @@ in
         ) layers
       );
 
+      loader = stdenv.cc.bintools.dynamicLinker;
+      fhsLoader = "${stdenv.hostPlatform.libDir}/${baseNameOf loader}";
+
       # The scripts are in it for the store paths their text refers to.
       closure = closureInfo {
         rootPaths =
@@ -133,7 +143,8 @@ in
             bashInteractive
             runScriptFile
           ]
-          ++ lib.optional hasEnvironment environmentFile;
+          ++ lib.optional hasEnvironment environmentFile
+          ++ lib.optional fhsCompat (lib.getLib stdenv.cc.libc);
       };
     in
     runCommand "${name}.sif"
@@ -159,6 +170,10 @@ in
         rm -rf nix-support
         mkdir -p bin etc .singularity.d/env
         [ -e bin/sh ] || ln -s ${lib.getExe bashInteractive} bin/sh
+        ${lib.optionalString fhsCompat ''
+          mkdir -p ${dirOf fhsLoader}
+          [ -e ${fhsLoader} ] || ln -s ${loader} ${fhsLoader}
+        ''}
 
         # Real files, not links into the store: at run time Apptainer adds the
         # calling user to them, and it skips links.
