@@ -1,3 +1,4 @@
+# Last run as each file's comment shows on x86_64-linux with Apptainer 1.5.3.
 { pkgs, nix2apptainer }:
 
 let
@@ -5,6 +6,6 @@ let
 in
 rec {
   image = callTest ./image.nix { };
-  layer = callTest ./layer.nix { };
-  layered-image = callTest ./layered-image.nix { inherit layer; };
+  overlay = callTest ./overlay.nix { };
+  overlaid-image = callTest ./overlaid-image.nix { inherit overlay; };
 }

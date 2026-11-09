@@ -1,6 +1,6 @@
 { nix2apptainer, coreutils }:
 
-nix2apptainer.buildLayer {
+nix2apptainer.buildOverlay {
   name = "coreutils";
   contents = [ coreutils ];
 }

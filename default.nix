@@ -4,6 +4,7 @@
   runCommand,
   closureInfo,
   symlinkJoin,
+  linkFarmFromDrvs,
   writeText,
   bashInteractive,
   squashfsTools,
@@ -25,15 +26,16 @@ let
     ];
 in
 {
-  # A read-only layer for `apptainer run --overlay <layer>:ro <image>`: a
+  # A read-only overlay for `apptainer run --overlay <overlay>:ro <image>`: a
   # squashfs holding the closure of `contents` under /nix/store.
   #
-  # name, compression, compressionLevel: as for buildImage
-  buildLayer =
+  # name:          the overlay file is <name>.sqfs
+  # compressionType, compressionLevel: as for buildImage
+  buildOverlay =
     {
       name,
       contents,
-      compression ? "gzip",
+      compressionType ? "gzip",
       compressionLevel ? null,
     }:
     let
@@ -43,7 +45,7 @@ in
       # scratch path (--check without the sandbox, content-addressed
       # derivations), it cannot rewrite that path inside the compressed
       # squashfs.
-      marker = "${lib.substring 0 32 (baseNameOf "${closure}")}-${name}";
+      marker = "${name}/${lib.substring 0 32 (baseNameOf "${closure}")}";
     in
     runCommand "${name}.sqfs"
       {
@@ -51,45 +53,48 @@ in
         passthru = { inherit contents closure marker; };
       }
       ''
-        mkdir -p root/.layers
+        mkdir -p root/.overlays/${name}
         xargs -a ${closure}/store-paths cp -a --parents -t root
-        touch root/.layers/${marker}
+        touch root/.overlays/${marker}
 
-        # The options `apptainer build` gives mksquashfs, so the layer reads
-        # wherever the image does.
+        # The same flags that `apptainer build` uses to pack an image, so the
+        # overlay reads wherever the image does.
         mksquashfs root $out -noappend -all-root -quiet \
-          ${lib.escapeShellArgs (compressionArgs compression compressionLevel)}
+          ${lib.escapeShellArgs (compressionArgs compressionType compressionLevel)}
       '';
 
-  # name:          of the derivation, which is the .sif file itself
-  # contents:      packages whose top-level directories (bin, lib, share, etc,
-  #                ...) are merged into the image root, as symlinks into the
-  #                store, like dockerTools does
-  # layers:        from buildLayer; their store paths are left out of the
-  #                image, which then runs only with them as overlays (and
-  #                says so otherwise).  Their contents are linked in too.
+  # Returns a directory that holds <name>.sif and a link to each overlay.
+  #
+  # name:          the image file is <name>.sif
+  # contents:      packages to put in the image, with their closure.  Their
+  #                top-level directories (bin, lib, share, etc, ...) are merged
+  #                into the image root, as symlinks into the store, like
+  #                dockerTools does
+  # overlays:      from buildOverlay; their store paths are left out of the
+  #                image, which then runs only with them (and says so
+  #                otherwise).  Their contents are linked in too.
   # runScript:     shell code that `apptainer run` executes, as /bin/sh
-  # environment:   variables set in every `apptainer run/exec/shell`
-  # extraCommands: shell code run in the image root before it is packed, as
-  #                the build user (`mkdir`, not `useradd`)
-  # compression:   squashfs compressor: gzip, zstd, xz, lz4 or lzo.  Images
+  # environment:   variables set in every `apptainer run/exec/shell`.  Each
+  #                value stays literal: quotes, $, ` and \ are not special.
+  # compressionType: squashfs compressor: gzip, zstd, xz, lz4 or lzo.  Images
   #                packed with zstd need Apptainer 1.4 or later to run.
-  # compressionLevel: for gzip (1-9), zstd (1-22) or lzo (1-9); null keeps
-  #                mksquashfs's default (9 for gzip, 15 for zstd)
+  # compressionLevel: for gzip (1-9), zstd (1-22) or lzo (1-9), not for xz or
+  #                lz4; null keeps mksquashfs's default (9 for gzip, 15 for
+  #                zstd)
   # fhsCompat:     add the conventional paths that programs not built by Nix
   #                look for.  For now only the dynamic loader
   #                (/lib64/ld-linux-x86-64.so.2 on x86_64), linked to the
   #                image's glibc: the host tools that `apptainer --nv` binds
   #                in, such as nvidia-smi, need it.
+  # apptainer:     the Apptainer that builds the image
   buildImage =
     {
       name,
       contents ? [ ],
-      layers ? [ ],
+      overlays ? [ ],
       runScript ? ''exec /bin/sh "$@"'',
       environment ? { },
-      extraCommands ? "",
-      compression ? "gzip",
+      compressionType ? "gzip",
       compressionLevel ? null,
       fhsCompat ? true,
       apptainer ? defaultApptainer,
@@ -97,7 +102,7 @@ in
     let
       rootLinks = symlinkJoin {
         name = "${name}-root";
-        paths = contents ++ lib.concatMap (layer: layer.contents) layers;
+        paths = contents ++ lib.concatMap (overlay: overlay.contents) overlays;
       };
 
       runScriptFile = writeText "runscript" ''
@@ -116,20 +121,18 @@ in
       );
 
       # Env files run before anything else in the container, even before
-      # Apptainer looks at /bin/sh, which may itself be in a layer.
-      layersCheckFile = writeText "00-layers.sh" (
-        lib.concatMapStrings (
-          layer:
-          let
-            file = baseNameOf (toString layer);
-          in
-          ''
-            if [ ! -e /.layers/${layer.marker} ]; then
-              echo "error: this image needs the layer ${file}: run it with --overlay ${file}:ro" >&2
-              exit 1
+      # Apptainer looks at /bin/sh, which may itself be in an overlay.
+      overlaysCheckFile = writeText "00-overlays.sh" (
+        lib.concatMapStrings (overlay: ''
+          if [ ! -e /.overlays/${overlay.marker} ]; then
+            if [ -d /.overlays/${dirOf overlay.marker} ]; then
+              echo "error: overlay ${overlay.name} is outdated: use the copy built with this image" >&2
+            else
+              echo "error: overlay ${overlay.name} is missing: run this image with --overlay ${overlay.name}:ro" >&2
             fi
-          ''
-        ) layers
+            exit 1
+          fi
+        '') overlays
       );
 
       loader = stdenv.cc.bintools.dynamicLinker;
@@ -146,19 +149,14 @@ in
           ++ lib.optional hasEnvironment environmentFile
           ++ lib.optional fhsCompat (lib.getLib stdenv.cc.libc);
       };
-    in
-    runCommand "${name}.sif"
-      {
-        nativeBuildInputs = [ apptainer ];
-        passthru = { inherit layers; };
-      }
-      ''
+
+      sif = runCommand "${name}.sif" { nativeBuildInputs = [ apptainer ]; } ''
         mkdir root
         pushd root >/dev/null
 
         comm -23 <(sort ${closure}/store-paths) \
           <(sort -u /dev/null ${
-            lib.concatMapStringsSep " " (layer: "${layer.closure}/store-paths") layers
+            lib.concatMapStringsSep " " (overlay: "${overlay.closure}/store-paths") overlays
           }) \
           | xargs -r cp -a --parents -t .
         cp -a ${rootLinks}/. .
@@ -185,11 +183,9 @@ in
         ${lib.optionalString hasEnvironment ''
           install -m 644 ${environmentFile} .singularity.d/env/90-environment.sh
         ''}
-        ${lib.optionalString (layers != [ ]) ''
-          install -m 644 ${layersCheckFile} .singularity.d/env/00-layers.sh
+        ${lib.optionalString (overlays != [ ]) ''
+          install -m 644 ${overlaysCheckFile} .singularity.d/env/00-overlays.sh
         ''}
-
-        ${extraCommands}
 
         popd >/dev/null
 
@@ -203,7 +199,9 @@ in
         echo "127.0.0.1 localhost" > hosts
         apptainer build \
           -B $PWD/resolv.conf:/etc/resolv.conf -B $PWD/hosts:/etc/hosts \
-          --mksquashfs-args ${lib.escapeShellArg (lib.concatStringsSep " " (compressionArgs compression compressionLevel))} \
+          --mksquashfs-args ${lib.escapeShellArg (lib.concatStringsSep " " (compressionArgs compressionType compressionLevel))} \
           $out root
       '';
+    in
+    linkFarmFromDrvs name ([ sif ] ++ overlays);
 }

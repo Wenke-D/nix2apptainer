@@ -14,15 +14,13 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      overlays.default = final: prev: {
-        nix2apptainer = final.callPackage ./. { };
-      };
+      lib.setup = pkgs: pkgs.callPackage ./. { };
 
       checks = forAllSystems (
         pkgs:
         import ./tests {
           inherit pkgs;
-          nix2apptainer = pkgs.callPackage ./. { };
+          nix2apptainer = self.lib.setup pkgs;
         }
       );
     };

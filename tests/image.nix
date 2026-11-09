@@ -1,4 +1,5 @@
-# nix build .#checks.x86_64-linux.image -o hello.sif
+# nix build .#checks.x86_64-linux.image -o hello
+# cd hello
 # apptainer run hello.sif                             # Hello, world!
 # apptainer run hello.sif -g Bonjour                  # Bonjour
 # apptainer exec hello.sif sh -c 'echo "$QUOTED"'     # it's "quoted": $HOME `date` \
@@ -10,7 +11,6 @@ nix2apptainer.buildImage {
   contents = [ hello ];
   runScript = ''exec hello "$@"'';
   environment.QUOTED = "it's \"quoted\": \$HOME `date` \\";
-  extraCommands = "mkdir scratch";
 
   compressionLevel = 1;
 }
