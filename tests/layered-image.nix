@@ -7,12 +7,12 @@
 #   apptainer exec --overlay coreutils.sqfs:ro hello-layered.sif ls /   # ls from the layer, no lib64
 #   apptainer run hello-layered.sif     # error: this image needs the layer ...-coreutils.sqfs
 {
-  apptainer-tools,
+  nix2apptainer,
   layer,
   hello,
 }:
 
-apptainer-tools.buildImage {
+nix2apptainer.buildImage {
   name = "hello-layered";
   contents = [ hello ];
   layers = [ layer ];

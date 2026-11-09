@@ -1,7 +1,7 @@
-{ pkgs, apptainer-tools }:
+{ pkgs, nix2apptainer }:
 
 let
-  callTest = file: args: pkgs.callPackage file ({ inherit apptainer-tools; } // args);
+  callTest = file: args: pkgs.callPackage file ({ inherit nix2apptainer; } // args);
 in
 rec {
   image = callTest ./image.nix { };

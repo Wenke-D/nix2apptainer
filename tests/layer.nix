@@ -1,6 +1,6 @@
-{ apptainer-tools, coreutils }:
+{ nix2apptainer, coreutils }:
 
-apptainer-tools.buildLayer {
+nix2apptainer.buildLayer {
   name = "coreutils";
   contents = [ coreutils ];
 }

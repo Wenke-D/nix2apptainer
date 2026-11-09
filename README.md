@@ -1,4 +1,4 @@
-# apptainer-tools
+# nix2apptainer
 
 Export Nix packages as Apptainer (SIF) images.
 
@@ -17,16 +17,16 @@ rebuilding and copying only that smaller image.
 ## Quick start
 
 ```nix
-apptainer-tools.buildImage {
+nix2apptainer.buildImage {
   name = "hello";
   contents = [ hello ];
   runScript = ''exec hello "$@"'';
 }
 ```
 
-`apptainer-tools` stands for the library: `tools` in the flake under
+`nix2apptainer` stands for the library: `tools` in the flake under
 [Adding it to your project](#adding-it-to-your-project), or
-`pkgs.apptainer-tools` with the overlay. The output of the derivation is the
+`pkgs.nix2apptainer` with the overlay. The output of the derivation is the
 `.sif` file itself. [tests/image.nix](tests/image.nix) is this example with a
 few more options set. To build and run it from a clone of this repository:
 
@@ -45,13 +45,13 @@ From a flake:
 
 ```nix
 {
-  inputs.apptainer-tools.url = "gitlab:coconut/apptainer-tools?host=gitlab.inria.fr";
-  inputs.apptainer-tools.inputs.nixpkgs.follows = "nixpkgs";
+  inputs.nix2apptainer.url = "github:Wenke-D/nix2apptainer";
+  inputs.nix2apptainer.inputs.nixpkgs.follows = "nixpkgs";
 
-  outputs = { nixpkgs, apptainer-tools, ... }:
+  outputs = { nixpkgs, nix2apptainer, ... }:
     let
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      tools = pkgs.callPackage apptainer-tools { };
+      tools = pkgs.callPackage nix2apptainer { };
     in
     {
       packages.x86_64-linux.image = tools.buildImage { /* ... */ };
@@ -59,9 +59,9 @@ From a flake:
 }
 ```
 
-The flake also has `overlays.default`, which adds `pkgs.apptainer-tools`.
+The flake also has `overlays.default`, which adds `pkgs.nix2apptainer`.
 Without flakes, pass a checkout of this repository to `callPackage`:
-`pkgs.callPackage ./apptainer-tools { }`. Either way the images are built from
+`pkgs.callPackage ./nix2apptainer { }`. Either way the images are built from
 the caller's packages; the flake's own `nixpkgs` input is used only for the
 checks.
 
@@ -82,12 +82,12 @@ an Apptainer version that supports `--overlay`. Here the layer holds MPI:
 
 ```nix
 let
-  mpi = apptainer-tools.buildLayer {
+  mpi = nix2apptainer.buildLayer {
     name = "mpi";
     contents = [ openmpi ];
   };
 in
-apptainer-tools.buildImage {
+nix2apptainer.buildImage {
   name = "solver";
   contents = [ my-solver ];
   layers = [ mpi ];
@@ -180,11 +180,11 @@ FATAL:   exec /usr/bin/nvidia-smi failed: a shared library is likely missing in 
 nixpkgs' `singularity-tools.buildImage` boots a Linux VM
 (`vmTools.runInLinuxVM`), formats a scratch ext3 disk in it, and runs
 `singularity build` there as root. Apptainer can pack a plain directory into a
-SIF without privileges, and `apptainer-tools` relies on that: it copies the
+SIF without privileges, and `nix2apptainer` relies on that: it copies the
 closure into a directory and runs `apptainer build` as the build user, in the
 ordinary Nix sandbox.
 
-| | `singularity-tools` | `apptainer-tools` |
+| | `singularity-tools` | `nix2apptainer` |
 | --- | --- | --- |
 | How the image is made | `singularity build` as root in a VM | `apptainer build` as the build user, in the Nix sandbox |
 | Builder | needs the `kvm` system feature | any Linux builder: remote, CI, a container |
