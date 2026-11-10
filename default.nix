@@ -73,6 +73,10 @@ in
   # overlays:      from buildOverlay; their store paths are left out of the
   #                image, which then runs only with them (and says so
   #                otherwise).  Their contents are linked in too.
+  # ignoreCollisions: when two of these packages have the same file, the image
+  #                gets the file of the first one and the build log shows a
+  #                warning.  Set to false to stop the build instead, unless
+  #                the two files are identical.
   # runScript:     shell code that `apptainer run` executes, as /bin/sh
   # environment:   variables set in every `apptainer run/exec/shell`.  Each
   #                value stays literal: quotes, $, ` and \ are not special.
@@ -92,6 +96,7 @@ in
       name,
       contents ? [ ],
       overlays ? [ ],
+      ignoreCollisions ? true,
       runScript ? ''exec /bin/sh "$@"'',
       environment ? { },
       compressionType ? "gzip",
@@ -138,8 +143,7 @@ in
         # As strings: from a derivation buildEnv takes meta.outputsToInstall,
         # which can name outputs that are not in the closure.
         paths = map (path: "${path}") (contents ++ lib.concatMap (overlay: overlay.contents) overlays);
-        # The first of two packages with the same file wins.
-        ignoreCollisions = true;
+        inherit ignoreCollisions;
 
         # buildEnv links a directory that only one package has to that package
         # as a whole, but it makes a directory of links for each path that is
