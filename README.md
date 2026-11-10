@@ -205,6 +205,11 @@ The overlay feature saves unnecessary rebuilds of applications.
   system.
 - `nix flake check --all-systems` builds them for x86_64-linux and
   aarch64-linux, and needs a builder for each.
+- `nix shell --inputs-from . nixpkgs#apptainer -c bash tests/runtime.sh` runs
+  the image and overlay checks with Apptainer. This needs unprivileged user
+  namespaces and SquashFS overlay support.
+- GitHub Actions runs both sets of checks on native x86_64-linux and
+  aarch64-linux runners.
 
 ## License
 

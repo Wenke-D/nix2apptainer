@@ -8,5 +8,9 @@ rec {
   image = callTest ./image.nix { };
   linked-directories = callTest ./linked-directories.nix { };
   overlay = callTest ./overlay.nix { };
+  outdated-overlay = nix2apptainer.buildOverlay {
+    name = "coreutils";
+    contents = [ pkgs.hello ];
+  };
   overlaid-image = callTest ./overlaid-image.nix { inherit overlay; };
 }
