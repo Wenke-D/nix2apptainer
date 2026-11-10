@@ -3,7 +3,7 @@
   stdenv,
   runCommand,
   closureInfo,
-  symlinkJoin,
+  buildEnv,
   linkFarmFromDrvs,
   writeText,
   bashInteractive,
@@ -100,11 +100,6 @@ in
       apptainer ? defaultApptainer,
     }:
     let
-      rootLinks = symlinkJoin {
-        name = "${name}-root";
-        paths = contents ++ lib.concatMap (overlay: overlay.contents) overlays;
-      };
-
       runScriptFile = writeText "runscript" ''
         #!/bin/sh
         ${runScript}
@@ -138,6 +133,45 @@ in
       loader = stdenv.cc.bintools.dynamicLinker;
       fhsLoader = "${stdenv.hostPlatform.libDir}/${baseNameOf loader}";
 
+      rootLinks = buildEnv {
+        name = "${name}-root";
+        # As strings: from a derivation buildEnv takes meta.outputsToInstall,
+        # which can name outputs that are not in the closure.
+        paths = map (path: "${path}") (contents ++ lib.concatMap (overlay: overlay.contents) overlays);
+        # The first of two packages with the same file wins.
+        ignoreCollisions = true;
+
+        # buildEnv links a directory that only one package has to that package
+        # as a whole, but it makes a directory of links for each path that is
+        # named here.  postBuild adds files to these, so they must be
+        # directories.
+        pathsToLink = [
+          "/"
+          "/bin"
+          "/etc"
+        ]
+        ++ lib.optional fhsCompat "/${dirOf fhsLoader}";
+
+        postBuild = ''
+          # Add a shell if no package provides one.
+          [ -e $out/bin/sh ] || ln -s ${lib.getExe bashInteractive} $out/bin/sh
+
+          # Add the loader at its conventional path if no package provides it:
+          # programs not built by Nix look for it there when they run in the
+          # container.
+          ${lib.optionalString fhsCompat ''
+            [ -e $out/${fhsLoader} ] || ln -s ${loader} $out/${fhsLoader}
+          ''}
+
+          # Replace any passwd and group that a package provides with real
+          # files: at run time Apptainer adds the calling user to them, and it
+          # skips links.
+          rm -f $out/etc/passwd $out/etc/group
+          echo "root:x:0:0:root:/root:/bin/sh" > $out/etc/passwd
+          echo "root:x:0:" > $out/etc/group
+        '';
+      };
+
       # The scripts are in it for the store paths their text refers to.
       closure = closureInfo {
         rootPaths =
@@ -161,24 +195,11 @@ in
           | xargs -r cp -a --parents -t .
         cp -a ${rootLinks}/. .
 
-        # Copies of the store are read-only; the steps below write into them,
-        # and so does `apptainer build`, which copies the tree once more.
+        # Copies of the store are read-only; the steps below write into the
+        # root, and `apptainer build` copies the tree once more.
         chmod -R u+w .
 
-        rm -rf nix-support
-        mkdir -p bin etc .singularity.d/env
-        [ -e bin/sh ] || ln -s ${lib.getExe bashInteractive} bin/sh
-        ${lib.optionalString fhsCompat ''
-          mkdir -p ${dirOf fhsLoader}
-          [ -e ${fhsLoader} ] || ln -s ${loader} ${fhsLoader}
-        ''}
-
-        # Real files, not links into the store: at run time Apptainer adds the
-        # calling user to them, and it skips links.
-        rm -f etc/passwd etc/group
-        echo "root:x:0:0:root:/root:/bin/sh" > etc/passwd
-        echo "root:x:0:" > etc/group
-
+        mkdir -p .singularity.d/env
         install -m 755 ${runScriptFile} .singularity.d/runscript
         ${lib.optionalString hasEnvironment ''
           install -m 644 ${environmentFile} .singularity.d/env/90-environment.sh

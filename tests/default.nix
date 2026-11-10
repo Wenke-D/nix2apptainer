@@ -6,6 +6,7 @@ let
 in
 rec {
   image = callTest ./image.nix { };
+  linked-directories = callTest ./linked-directories.nix { };
   overlay = callTest ./overlay.nix { };
   overlaid-image = callTest ./overlaid-image.nix { inherit overlay; };
 }
